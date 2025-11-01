@@ -282,12 +282,14 @@
         }
 
         async function refreshDropbox() {
+            console.log("refreshDropbox called");
             const content = document.getElementById('db-content');
             content.innerHTML = '<div class="loading">Loading files...</div>';
             
             try {
-                const response = await fetch('/dropbox/list');
+                const response = await fetch('/dropbox/list?_=' + Date.now(), { cache: 'no-store' });
                 const data = await response.json();
+                console.log("Received data:", data);
                 
                 if (data.error) {
                     content.innerHTML = `<div class="message error">${data.error}</div>`;
@@ -356,9 +358,13 @@
                 
                 if (data.error) {
                     showMessage(`Error: ${data.error}`, 'error');
-                } else {
+                    console.log("Delete successful, calling refreshDropbox");
+                    console.log("Delete successful, calling refreshDropbox");
+                } else if (data.success || response.ok) {
                     showMessage(`✅ ${fileName} deleted successfully!`, 'success');
-                    refreshDropbox();
+                    await refreshDropbox();
+                } else {
+                    showMessage(`Unexpected response from server`, 'error');
                 }
                 
             } catch (error) {
