@@ -1,6 +1,8 @@
 # Environment variables
 .env
 token_cache.json
+DEPLOYMENT.md
+get_dropbox_token.py
 
 # Python
 __pycache__/
