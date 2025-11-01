@@ -6,7 +6,7 @@
 
 # Passenger Configuration
 PassengerEnabled On
-PassengerAppRoot /home/videobridge/videobridge.pasanagroup.com
+PassengerAppRoot /home/videobridge/videobridge.roblog.com
 PassengerPython /usr/bin/python3
 
 # Allow .env file to be read
