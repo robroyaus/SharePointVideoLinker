@@ -160,15 +160,39 @@
         </div>
         
         <div class="link-output" id="link-output">
-            <h3>✅ Direct Download Link Generated</h3>
-            <p style="margin-bottom: 15px; color: #666;">This link can be used in Metricool or any other service that requires a direct video link:</p>
+            <h3>✅ Links Generated</h3>
+            
+            <p style="margin-bottom: 10px; color: #666; font-weight: bold;">🎯 Proxy URL (Recommended for Metricool):</p>
             <div class="link-box">
-                <input type="text" class="link-input" id="direct-link" readonly>
-                <button class="copy-btn" onclick="copyLink()">Copy Link</button>
+                <input type="text" class="link-input" id="proxy-link" readonly>
+                <button class="copy-btn" onclick="copyLink('proxy-link')">Copy</button>
             </div>
-            <p style="font-size: 13px; color: #666; margin-top: 10px;">
-                ℹ️ This is a public, anonymous link that works without authentication
+            <p style="font-size: 12px; color: #555; margin-top: 5px; margin-bottom: 15px;">
+                This URL streams the video directly with no redirects - works best with Metricool
             </p>
+            
+            <details style="margin-top: 20px;">
+                <summary style="cursor: pointer; color: #0078d4; font-weight: bold;">Show Alternative Links</summary>
+                <div style="margin-top: 15px;">
+                    <p style="margin-bottom: 10px; color: #666; font-weight: bold;">Direct Download Link:</p>
+                    <div class="link-box">
+                        <input type="text" class="link-input" id="direct-link" readonly>
+                        <button class="copy-btn" onclick="copyLink('direct-link')">Copy</button>
+                    </div>
+                    
+                    <p style="margin-bottom: 10px; margin-top: 15px; color: #666; font-weight: bold;">Embed Link:</p>
+                    <div class="link-box">
+                        <input type="text" class="link-input" id="embed-link" readonly>
+                        <button class="copy-btn" onclick="copyLink('embed-link')">Copy</button>
+                    </div>
+                    
+                    <p style="margin-bottom: 10px; margin-top: 15px; color: #666; font-weight: bold;">SharePoint Sharing Link:</p>
+                    <div class="link-box">
+                        <input type="text" class="link-input" id="sharing-link" readonly>
+                        <button class="copy-btn" onclick="copyLink('sharing-link')">Copy</button>
+                    </div>
+                </div>
+            </details>
         </div>
     </div>
 
@@ -225,17 +249,19 @@
                 
                 // Add folders
                 data.items.filter(item => item.type === 'folder').forEach(item => {
-                    html += `<div class="file-item folder" onclick="browse('${item.path}')">
+                    const folderPath = currentPath + '/' + item.name;
+                    html += `<div class="file-item folder" onclick="browse('${folderPath}')">
                         <span class="file-name">${item.name}</span>
                     </div>`;
                 });
                 
                 // Add files
                 data.items.filter(item => item.type === 'file').forEach(item => {
+                    const escapedData = JSON.stringify({item_id: item.item_id, drive_id: item.drive_id, site_id: item.site_id}).replace(/"/g, '&quot;');
                     html += `<div class="file-item file">
                         <span class="file-name">${item.name}</span>
                         <span class="file-size">${formatBytes(item.size)}</span>
-                        <button class="select-btn" onclick="generateLink('${item.path}', '${item.name}')">Generate Link</button>
+                        <button class="select-btn" onclick='generateLink(${JSON.stringify(item)})'>Generate Link</button>
                     </div>`;
                 });
                 
@@ -250,19 +276,23 @@
             }
         }
 
-        async function generateLink(filePath, fileName) {
+        async function generateLink(item) {
             const linkOutput = document.getElementById('link-output');
             linkOutput.classList.remove('show');
             
             try {
-                showSuccess('Generating link for ' + fileName + '...');
+                showSuccess('Generating link for ' + item.name + '...');
                 
                 const response = await fetch('/generate-link', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ file_path: filePath })
+                    body: JSON.stringify({ 
+                        item_id: item.item_id,
+                        drive_id: item.drive_id,
+                        site_id: item.site_id
+                    })
                 });
                 
                 const data = await response.json();
@@ -272,17 +302,20 @@
                     return;
                 }
                 
+                document.getElementById('proxy-link').value = data.proxy_url;
                 document.getElementById('direct-link').value = data.direct_url;
+                document.getElementById('embed-link').value = data.embed_url || data.direct_url;
+                document.getElementById('sharing-link').value = data.sharing_url;
                 linkOutput.classList.add('show');
-                showSuccess('Link generated successfully!');
+                showSuccess('Links generated successfully!');
                 
             } catch (error) {
                 showError('Failed to generate link: ' + error.message);
             }
         }
 
-        function copyLink() {
-            const input = document.getElementById('direct-link');
+        function copyLink(inputId) {
+            const input = document.getElementById(inputId);
             input.select();
             document.execCommand('copy');
             showSuccess('Link copied to clipboard!');

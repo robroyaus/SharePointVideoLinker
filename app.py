@@ -1,83 +1,168 @@
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
-from office365.runtime.auth.authentication_context import AuthenticationContext
-from office365.sharepoint.client_context import ClientContext
-from office365.sharepoint.files.file import File
 import os
 from datetime import datetime, timedelta
 import secrets
+import msal
+import requests
+import json
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
 
-# Configuration - you'll need to set these
+# Configuration
 SHAREPOINT_SITE_URL = os.getenv('SHAREPOINT_SITE_URL', '')
-USERNAME = os.getenv('SHAREPOINT_USERNAME', '')
-PASSWORD = os.getenv('SHAREPOINT_PASSWORD', '')
+PUBLIC_URL = os.getenv('PUBLIC_URL', '')  # Set this to your ngrok URL
+CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"  # Microsoft Graph PowerShell app (public client)
+AUTHORITY = "https://login.microsoftonline.com/common"
+SCOPES = [
+    "Files.ReadWrite.All",
+    "Sites.ReadWrite.All",
+    "User.Read"
+]
+TOKEN_CACHE_FILE = "token_cache.json"
 
+# Extract site details from URL
+def parse_site_url(url):
+    """Extract tenant and site path from SharePoint URL"""
+    if not url:
+        return None, None, None
+    parts = url.replace('https://', '').split('/')
+    tenant = parts[0].split('.')[0]  # e.g., 'pasanagroup' from 'pasanagroup.sharepoint.com'
+    hostname = parts[0]  # e.g., 'pasanagroup.sharepoint.com'
+    site_path = '/'.join(parts[1:])  # e.g., 'sites/MediaCommunications'
+    return tenant, hostname, site_path
 
-def get_sharepoint_context():
-    """Create and return authenticated SharePoint context"""
-    if not SHAREPOINT_SITE_URL or not USERNAME or not PASSWORD:
-        return None
+def load_token_cache():
+    """Load token cache from file"""
+    cache = msal.SerializableTokenCache()
+    if os.path.exists(TOKEN_CACHE_FILE):
+        with open(TOKEN_CACHE_FILE, 'r') as f:
+            cache.deserialize(f.read())
+    return cache
+
+def save_token_cache(cache):
+    """Save token cache to file"""
+    if cache.has_state_changed:
+        with open(TOKEN_CACHE_FILE, 'w') as f:
+            f.write(cache.serialize())
+
+def get_access_token():
+    """Get access token using device code flow"""
+    cache = load_token_cache()
+    app = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY, token_cache=cache)
     
-    ctx_auth = AuthenticationContext(SHAREPOINT_SITE_URL)
-    if ctx_auth.acquire_token_for_user(USERNAME, PASSWORD):
-        ctx = ClientContext(SHAREPOINT_SITE_URL, ctx_auth)
-        return ctx
-    return None
+    # Try to get token from cache first
+    accounts = app.get_accounts()
+    if accounts:
+        result = app.acquire_token_silent(SCOPES, account=accounts[0])
+        if result:
+            save_token_cache(cache)
+            return result['access_token']
+    
+    # Need interactive authentication
+    flow = app.initiate_device_flow(scopes=SCOPES)
+    if "user_code" not in flow:
+        raise Exception("Failed to create device flow")
+    
+    print("\n" + "="*60)
+    print("AUTHENTICATION REQUIRED")
+    print("="*60)
+    print(flow["message"])
+    print("="*60 + "\n")
+    
+    result = app.acquire_token_by_device_flow(flow)
+    if "access_token" in result:
+        save_token_cache(cache)
+        return result['access_token']
+    else:
+        raise Exception(f"Authentication failed: {result.get('error_description')}")
+
+def get_graph_headers():
+    """Get headers for Graph API requests"""
+    token = get_access_token()
+    return {
+        'Authorization': f'Bearer {token}',
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+    }
 
 
 @app.route('/')
 def index():
     """Home page"""
-    if not SHAREPOINT_SITE_URL or not USERNAME:
+    if not SHAREPOINT_SITE_URL:
         return render_template('setup.html')
     return render_template('index.html')
 
 
 @app.route('/browse')
 def browse():
-    """Browse SharePoint folders and files"""
+    """Browse SharePoint folders and files using Microsoft Graph"""
     folder_path = request.args.get('path', 'Shared Documents')
     
     try:
-        ctx = get_sharepoint_context()
-        if not ctx:
-            return jsonify({'error': 'Authentication failed'}), 401
+        headers = get_graph_headers()
+        tenant, hostname, site_path = parse_site_url(SHAREPOINT_SITE_URL)
         
-        # Get folder
-        folder = ctx.web.get_folder_by_server_relative_url(folder_path)
+        if not tenant or not hostname or not site_path:
+            return jsonify({'error': 'Invalid SharePoint site URL'}), 400
         
-        # Get subfolders
-        folders = folder.folders
-        ctx.load(folders)
+        # Get site ID
+        site_url = f"https://graph.microsoft.com/v1.0/sites/{hostname}:/{site_path}"
+        site_response = requests.get(site_url, headers=headers)
         
-        # Get files
-        files = folder.files
-        ctx.load(files)
+        if site_response.status_code != 200:
+            return jsonify({'error': f'Failed to access site: {site_response.text}'}), site_response.status_code
         
-        ctx.execute_query()
+        site_id = site_response.json()['id']
         
+        # Get drive (document library)
+        drive_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive"
+        drive_response = requests.get(drive_url, headers=headers)
+        
+        if drive_response.status_code != 200:
+            return jsonify({'error': f'Failed to access drive: {drive_response.text}'}), drive_response.status_code
+        
+        drive_id = drive_response.json()['id']
+        
+        # Convert folder path to Graph API path
+        if folder_path == 'Shared Documents' or folder_path == '':
+            items_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root/children"
+        else:
+            # Remove 'Shared Documents/' prefix if present
+            clean_path = folder_path.replace('Shared Documents/', '').replace('Shared Documents', '')
+            if clean_path:
+                items_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{clean_path}:/children"
+            else:
+                items_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root/children"
+        
+        items_response = requests.get(items_url, headers=headers)
+        
+        if items_response.status_code != 200:
+            return jsonify({'error': f'Failed to list items: {items_response.text}'}), items_response.status_code
+        
+        graph_items = items_response.json().get('value', [])
         items = []
         
-        # Add folders
-        for subfolder in folders:
-            if subfolder.properties.get('Name') not in ['Forms']:
+        for item in graph_items:
+            if 'folder' in item:
+                # It's a folder
                 items.append({
-                    'name': subfolder.properties.get('Name'),
+                    'name': item['name'],
                     'type': 'folder',
-                    'path': subfolder.properties.get('ServerRelativeUrl')
+                    'path': item.get('webUrl', ''),
+                    'item_id': item['id']
                 })
-        
-        # Add MP4 files
-        for file in files:
-            filename = file.properties.get('Name', '')
-            if filename.lower().endswith('.mp4'):
+            elif 'file' in item and item['name'].lower().endswith('.mp4'):
+                # It's an MP4 file
                 items.append({
-                    'name': filename,
+                    'name': item['name'],
                     'type': 'file',
-                    'path': file.properties.get('ServerRelativeUrl'),
-                    'size': file.properties.get('Length', 0)
+                    'path': item.get('webUrl', ''),
+                    'size': item.get('size', 0),
+                    'item_id': item['id'],
+                    'drive_id': drive_id,
+                    'site_id': site_id
                 })
         
         return jsonify({
@@ -91,48 +176,126 @@ def browse():
 
 @app.route('/generate-link', methods=['POST'])
 def generate_link():
-    """Generate a public direct download link for an MP4 file"""
+    """Generate a public direct download link for an MP4 file using Microsoft Graph"""
     data = request.get_json()
-    file_path = data.get('file_path')
+    item_id = data.get('item_id')
+    drive_id = data.get('drive_id')
+    site_id = data.get('site_id')
     
-    if not file_path:
-        return jsonify({'error': 'No file path provided'}), 400
+    if not all([item_id, drive_id, site_id]):
+        return jsonify({'error': 'Missing required parameters'}), 400
     
     try:
-        ctx = get_sharepoint_context()
-        if not ctx:
-            return jsonify({'error': 'Authentication failed'}), 401
+        headers = get_graph_headers()
         
-        # Get the file
-        file = ctx.web.get_file_by_server_relative_url(file_path)
-        ctx.load(file)
-        ctx.execute_query()
+        # First create an anonymous sharing link
+        share_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives/{drive_id}/items/{item_id}/createLink"
         
-        # Create anonymous sharing link with direct download
-        # Using create_anonymous_link with is_edit_link=False for read-only access
-        link_result = file.share_link(
-            kind=4,  # Anonymous link
-            expiration=datetime.now() + timedelta(days=365)
-        )
-        ctx.execute_query()
+        expiry = (datetime.now() + timedelta(days=365)).isoformat() + "Z"
         
-        sharing_url = link_result.value.sharingLinkInfo.Url
+        share_payload = {
+            "type": "view",
+            "scope": "anonymous",
+            "expirationDateTime": expiry
+        }
         
-        # Convert to direct download link
-        # SharePoint links need to be modified to be direct download
-        if 'sharepoint.com' in sharing_url:
-            # Replace the sharing URL format with direct download format
-            direct_url = sharing_url.replace('/:v:/g/', '/download?')
+        share_response = requests.post(share_url, headers=headers, json=share_payload)
+        
+        if share_response.status_code not in [200, 201]:
+            return jsonify({'error': f'Failed to create sharing link: {share_response.text}'}), share_response.status_code
+        
+        share_data = share_response.json()
+        sharing_url = share_data.get('link', {}).get('webUrl', '')
+        share_id = share_data.get('id', '')
+        
+        # Convert sharing URL to embed/download URL
+        # SharePoint sharing URLs have format: https://[tenant].sharepoint.com/:v:/[path]
+        # We need to convert to: https://[tenant].sharepoint.com/[path]?download=1
+        
+        if 'sharepoint.com' in sharing_url and '/:v:/' in sharing_url:
+            # Extract the parts after /:v:/
+            parts = sharing_url.split('/:v:/')
+            if len(parts) == 2:
+                base_url = parts[0]
+                path_and_params = parts[1]
+                
+                # Remove any existing query parameters
+                path = path_and_params.split('?')[0]
+                
+                # Construct direct download URL
+                direct_url = f"{base_url}/{path}?download=1"
+        elif 'sharepoint.com' in sharing_url and '/:u:/' in sharing_url:
+            # For OneDrive-style links
+            direct_url = sharing_url.replace('/:u:/', '/')
             if '?download=1' not in direct_url:
                 direct_url = direct_url.split('?')[0] + '?download=1'
         else:
+            # Fallback: just add download parameter
             direct_url = sharing_url
+            if '?download=1' not in direct_url:
+                if '?' in direct_url:
+                    direct_url += '&download=1'
+                else:
+                    direct_url += '?download=1'
+        
+        # Also create an embed URL which some services prefer
+        embed_url = direct_url.replace('?download=1', '?embed=1')
+        
+        # Create proxy URL that streams video directly (for Metricool compatibility)
+        from flask import request as flask_request
+        # Use PUBLIC_URL if set (for ngrok), otherwise use request URL
+        base_url = PUBLIC_URL if PUBLIC_URL else flask_request.url_root.rstrip('/')
+        proxy_url = f"{base_url}/video/{site_id}/{drive_id}/{item_id}"
         
         return jsonify({
             'success': True,
+            'proxy_url': proxy_url,
             'direct_url': direct_url,
-            'sharing_url': sharing_url
+            'embed_url': embed_url,
+            'sharing_url': sharing_url,
+            'share_id': share_id
         })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/video/<site_id>/<drive_id>/<item_id>')
+def stream_video(site_id, drive_id, item_id):
+    """Stream video directly with proper Content-Type header (no redirects)"""
+    try:
+        headers = get_graph_headers()
+        
+        # Get the download URL from Graph API
+        item_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives/{drive_id}/items/{item_id}"
+        item_response = requests.get(item_url, headers=headers)
+        
+        if item_response.status_code != 200:
+            return jsonify({'error': 'Failed to get file'}), item_response.status_code
+        
+        item_data = item_response.json()
+        download_url = item_data.get('@microsoft.graph.downloadUrl', '')
+        
+        if not download_url:
+            return jsonify({'error': 'No download URL available'}), 404
+        
+        # Stream the video content directly
+        video_response = requests.get(download_url, stream=True)
+        
+        if video_response.status_code != 200:
+            return jsonify({'error': 'Failed to download video'}), video_response.status_code
+        
+        # Return video with proper headers
+        from flask import Response
+        return Response(
+            video_response.iter_content(chunk_size=8192),
+            content_type='video/mp4',
+            headers={
+                'Content-Length': video_response.headers.get('Content-Length', ''),
+                'Accept-Ranges': 'bytes',
+                'Cache-Control': 'public, max-age=31536000'
+            }
+        )
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -140,18 +303,27 @@ def generate_link():
 
 @app.route('/test-connection', methods=['POST'])
 def test_connection():
-    """Test SharePoint connection"""
+    """Test SharePoint connection using Microsoft Graph"""
     try:
-        ctx = get_sharepoint_context()
-        if ctx:
-            web = ctx.web
-            ctx.load(web)
-            ctx.execute_query()
+        headers = get_graph_headers()
+        tenant, hostname, site_path = parse_site_url(SHAREPOINT_SITE_URL)
+        
+        if not tenant or not hostname or not site_path:
+            return jsonify({'error': 'Invalid SharePoint site URL'}), 400
+        
+        # Try to get site info
+        site_url = f"https://graph.microsoft.com/v1.0/sites/{hostname}:/{site_path}"
+        response = requests.get(site_url, headers=headers)
+        
+        if response.status_code == 200:
+            site_data = response.json()
             return jsonify({
                 'success': True,
-                'site_title': web.properties.get('Title', 'Connected')
+                'site_title': site_data.get('displayName', 'Connected')
             })
-        return jsonify({'error': 'Authentication failed'}), 401
+        else:
+            return jsonify({'error': f'Failed to connect: {response.text}'}), response.status_code
+            
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
