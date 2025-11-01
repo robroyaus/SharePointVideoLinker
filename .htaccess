@@ -1,0 +1,29 @@
+# Basic Authentication (comment out if using Flask's built-in auth)
+# AuthType Basic
+# AuthName "SharePoint Video Bridge"
+# AuthUserFile /home/username/.htpasswd
+# Require valid-user
+
+# Passenger Configuration
+PassengerEnabled On
+PassengerAppRoot /home/username/yourdomain.com
+PassengerPython /usr/bin/python3
+
+# Allow .env file to be read
+<Files ".env">
+    Require all denied
+</Files>
+
+# Prevent directory listing
+Options -Indexes
+
+# Error pages
+ErrorDocument 404 /404.html
+ErrorDocument 500 /500.html
+
+# Security headers
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set X-XSS-Protection "1; mode=block"
+</IfModule>

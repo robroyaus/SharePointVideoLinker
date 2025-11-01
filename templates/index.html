@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SharePoint Video Linker</title>
+    <title>SharePoint to Dropbox Video Bridge</title>
     <style>
         * {
             margin: 0;
@@ -13,41 +13,58 @@
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             background: #f5f5f5;
-            padding: 20px;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
         }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            padding: 30px;
+        header {
+            background: #0078d4;
+            color: white;
+            padding: 15px 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         h1 {
-            color: #333;
-            margin-bottom: 10px;
+            font-size: 20px;
+            font-weight: 600;
         }
-        .subtitle {
-            color: #666;
-            margin-bottom: 30px;
+        .split-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: white;
+            margin: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .panel-header {
+            background: #f8f8f8;
+            padding: 15px 20px;
+            border-bottom: 1px solid #e0e0e0;
+            font-weight: 600;
+            color: #333;
+        }
+        .panel-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
         }
         .breadcrumb {
-            background: #f8f8f8;
-            padding: 10px 15px;
-            border-radius: 4px;
-            margin-bottom: 20px;
-            font-size: 14px;
+            background: #fff;
+            padding: 10px 20px;
+            font-size: 13px;
             color: #666;
-        }
-        .file-browser {
-            border: 1px solid #e0e0e0;
-            border-radius: 4px;
-            min-height: 400px;
-            margin-bottom: 20px;
+            border-bottom: 1px solid #e0e0e0;
         }
         .file-item {
             padding: 12px 15px;
-            border-bottom: 1px solid #e0e0e0;
+            border-bottom: 1px solid #f0f0f0;
             display: flex;
             align-items: center;
             cursor: pointer;
@@ -68,13 +85,14 @@
         }
         .file-name {
             flex: 1;
+            font-size: 14px;
         }
         .file-size {
             color: #999;
-            font-size: 13px;
+            font-size: 12px;
             margin-right: 15px;
         }
-        .select-btn {
+        .btn {
             background: #0078d4;
             color: white;
             border: none;
@@ -82,135 +100,94 @@
             border-radius: 4px;
             cursor: pointer;
             font-size: 13px;
+            margin-left: 5px;
         }
-        .select-btn:hover {
+        .btn:hover {
             background: #005a9e;
         }
-        .link-output {
-            background: #f8f8f8;
-            padding: 20px;
-            border-radius: 4px;
-            margin-top: 20px;
-            display: none;
-        }
-        .link-output.show {
-            display: block;
-        }
-        .link-output h3 {
-            margin-bottom: 15px;
-            color: #333;
-        }
-        .link-box {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 10px;
-        }
-        .link-input {
-            flex: 1;
-            padding: 10px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            font-family: monospace;
-            font-size: 13px;
-        }
-        .copy-btn {
+        .btn-success {
             background: #28a745;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
         }
-        .copy-btn:hover {
+        .btn-success:hover {
             background: #218838;
+        }
+        .btn-danger {
+            background: #dc3545;
+        }
+        .btn-danger:hover {
+            background: #c82333;
         }
         .loading {
             text-align: center;
             padding: 40px;
             color: #999;
         }
+        .message {
+            padding: 10px 15px;
+            margin: 10px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
         .error {
             background: #f8d7da;
             color: #721c24;
-            padding: 15px;
-            border-radius: 4px;
-            margin-bottom: 20px;
+            border: 1px solid #f5c6cb;
         }
         .success {
             background: #d4edda;
             color: #155724;
-            padding: 15px;
-            border-radius: 4px;
-            margin-bottom: 20px;
+            border: 1px solid #c3e6cb;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>SharePoint Video Linker</h1>
-        <p class="subtitle">Browse your SharePoint files and generate public direct download links for MP4 videos</p>
-        
-        <div id="error-message" class="error" style="display: none;"></div>
-        <div id="success-message" class="success" style="display: none;"></div>
-        
-        <div class="breadcrumb" id="breadcrumb">Shared Documents</div>
-        
-        <div class="file-browser" id="file-browser">
-            <div class="loading">Loading files...</div>
+    <header>
+        <h1>📤 SharePoint to Dropbox Video Bridge</h1>
+    </header>
+    
+    <div class="split-container">
+        <!-- Top Panel: SharePoint Browser -->
+        <div class="panel">
+            <div class="panel-header">SharePoint Browser</div>
+            <div class="breadcrumb" id="sp-breadcrumb">Shared Documents</div>
+            <div class="panel-content" id="sp-content">
+                <div class="loading">Loading SharePoint files...</div>
+            </div>
         </div>
         
-        <div class="link-output" id="link-output">
-            <h3>✅ Links Generated</h3>
-            
-            <p style="margin-bottom: 10px; color: #666; font-weight: bold;">🎯 Proxy URL (Recommended for Metricool):</p>
-            <div class="link-box">
-                <input type="text" class="link-input" id="proxy-link" readonly>
-                <button class="copy-btn" onclick="copyLink('proxy-link')">Copy</button>
+        <!-- Bottom Panel: Dropbox File Manager -->
+        <div class="panel">
+            <div class="panel-header">
+                Dropbox File Manager
+                <button class="btn" onclick="refreshDropbox()" style="float: right;">🔄 Refresh</button>
             </div>
-            <p style="font-size: 12px; color: #555; margin-top: 5px; margin-bottom: 15px;">
-                This URL streams the video directly with no redirects - works best with Metricool
-            </p>
-            
-            <details style="margin-top: 20px;">
-                <summary style="cursor: pointer; color: #0078d4; font-weight: bold;">Show Alternative Links</summary>
-                <div style="margin-top: 15px;">
-                    <p style="margin-bottom: 10px; color: #666; font-weight: bold;">Direct Download Link:</p>
-                    <div class="link-box">
-                        <input type="text" class="link-input" id="direct-link" readonly>
-                        <button class="copy-btn" onclick="copyLink('direct-link')">Copy</button>
-                    </div>
-                    
-                    <p style="margin-bottom: 10px; margin-top: 15px; color: #666; font-weight: bold;">Embed Link:</p>
-                    <div class="link-box">
-                        <input type="text" class="link-input" id="embed-link" readonly>
-                        <button class="copy-btn" onclick="copyLink('embed-link')">Copy</button>
-                    </div>
-                    
-                    <p style="margin-bottom: 10px; margin-top: 15px; color: #666; font-weight: bold;">SharePoint Sharing Link:</p>
-                    <div class="link-box">
-                        <input type="text" class="link-input" id="sharing-link" readonly>
-                        <button class="copy-btn" onclick="copyLink('sharing-link')">Copy</button>
-                    </div>
-                </div>
-            </details>
+            <div class="panel-content" id="db-content">
+                <div class="loading">Loading Dropbox files...</div>
+            </div>
         </div>
     </div>
+    
+    <!-- Messages -->
+    <div id="messages" style="position: fixed; top: 70px; right: 20px; width: 350px; z-index: 1000;"></div>
 
     <script>
         let currentPath = 'Shared Documents';
 
-        function showError(message) {
-            const errorDiv = document.getElementById('error-message');
-            errorDiv.textContent = message;
-            errorDiv.style.display = 'block';
-            setTimeout(() => errorDiv.style.display = 'none', 5000);
-        }
-
-        function showSuccess(message) {
-            const successDiv = document.getElementById('success-message');
-            successDiv.textContent = message;
-            successDiv.style.display = 'block';
-            setTimeout(() => successDiv.style.display = 'none', 5000);
+        function showMessage(message, type = 'info', duration = 5000) {
+            const messagesDiv = document.getElementById('messages');
+            const messageEl = document.createElement('div');
+            messageEl.className = `message ${type}`;
+            messageEl.textContent = message;
+            messagesDiv.appendChild(messageEl);
+            
+            setTimeout(() => {
+                messageEl.remove();
+            }, duration);
         }
 
         function formatBytes(bytes) {
@@ -221,47 +198,46 @@
             return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
         }
 
-        async function browse(path) {
+        async function browseSharePoint(path) {
             currentPath = path || currentPath;
-            const browser = document.getElementById('file-browser');
-            browser.innerHTML = '<div class="loading">Loading files...</div>';
+            const content = document.getElementById('sp-content');
+            content.innerHTML = '<div class="loading">Loading files...</div>';
             
             try {
                 const response = await fetch(`/browse?path=${encodeURIComponent(currentPath)}`);
                 const data = await response.json();
                 
                 if (data.error) {
-                    showError(data.error);
+                    content.innerHTML = `<div class="message error">${data.error}</div>`;
                     return;
                 }
                 
-                document.getElementById('breadcrumb').textContent = data.current_path;
+                document.getElementById('sp-breadcrumb').textContent = data.current_path;
                 
                 let html = '';
                 
-                // Add parent folder link if not at root
+                // Parent folder link
                 if (currentPath !== 'Shared Documents') {
                     const parentPath = currentPath.split('/').slice(0, -1).join('/') || 'Shared Documents';
-                    html += `<div class="file-item folder" onclick="browse('${parentPath}')">
+                    html += `<div class="file-item folder" onclick="browseSharePoint('${parentPath}')">
                         <span class="file-name">.. (Parent Folder)</span>
                     </div>`;
                 }
                 
-                // Add folders
+                // Folders
                 data.items.filter(item => item.type === 'folder').forEach(item => {
                     const folderPath = currentPath + '/' + item.name;
-                    html += `<div class="file-item folder" onclick="browse('${folderPath}')">
+                    html += `<div class="file-item folder" onclick="browseSharePoint('${folderPath.replace(/'/g, "\\'")}')">
                         <span class="file-name">${item.name}</span>
                     </div>`;
                 });
                 
-                // Add files
+                // MP4 files
                 data.items.filter(item => item.type === 'file').forEach(item => {
-                    const escapedData = JSON.stringify({item_id: item.item_id, drive_id: item.drive_id, site_id: item.site_id}).replace(/"/g, '&quot;');
                     html += `<div class="file-item file">
                         <span class="file-name">${item.name}</span>
                         <span class="file-size">${formatBytes(item.size)}</span>
-                        <button class="select-btn" onclick='generateLink(${JSON.stringify(item)})'>Generate Link</button>
+                        <button class="btn" onclick='copyToDropbox(${JSON.stringify(item)})'>Copy to Dropbox</button>
                     </div>`;
                 });
                 
@@ -269,60 +245,130 @@
                     html = '<div class="loading">No MP4 files found in this folder</div>';
                 }
                 
-                browser.innerHTML = html;
+                content.innerHTML = html;
                 
             } catch (error) {
-                showError('Failed to load files: ' + error.message);
+                content.innerHTML = `<div class="message error">Failed to load files: ${error.message}</div>`;
             }
         }
 
-        async function generateLink(item) {
-            const linkOutput = document.getElementById('link-output');
-            linkOutput.classList.remove('show');
+        async function copyToDropbox(item) {
+            showMessage(`Copying ${item.name} to Dropbox...`, 'info', 10000);
             
             try {
-                showSuccess('Generating link for ' + item.name + '...');
-                
-                const response = await fetch('/generate-link', {
+                const response = await fetch('/dropbox/copy', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ 
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
                         item_id: item.item_id,
                         drive_id: item.drive_id,
-                        site_id: item.site_id
+                        site_id: item.site_id,
+                        filename: item.name
                     })
                 });
                 
                 const data = await response.json();
                 
                 if (data.error) {
-                    showError(data.error);
-                    return;
+                    showMessage(`Error: ${data.error}`, 'error');
+                } else {
+                    showMessage(`✅ ${item.name} copied successfully!`, 'success');
+                    refreshDropbox();
                 }
                 
-                document.getElementById('proxy-link').value = data.proxy_url;
-                document.getElementById('direct-link').value = data.direct_url;
-                document.getElementById('embed-link').value = data.embed_url || data.direct_url;
-                document.getElementById('sharing-link').value = data.sharing_url;
-                linkOutput.classList.add('show');
-                showSuccess('Links generated successfully!');
-                
             } catch (error) {
-                showError('Failed to generate link: ' + error.message);
+                showMessage(`Failed to copy: ${error.message}`, 'error');
             }
         }
 
-        function copyLink(inputId) {
-            const input = document.getElementById(inputId);
-            input.select();
-            document.execCommand('copy');
-            showSuccess('Link copied to clipboard!');
+        async function refreshDropbox() {
+            const content = document.getElementById('db-content');
+            content.innerHTML = '<div class="loading">Loading files...</div>';
+            
+            try {
+                const response = await fetch('/dropbox/list');
+                const data = await response.json();
+                
+                if (data.error) {
+                    content.innerHTML = `<div class="message error">${data.error}</div>`;
+                    return;
+                }
+                
+                let html = '';
+                
+                if (data.files.length === 0) {
+                    html = '<div class="message info">No MP4 files in Dropbox folder yet. Copy files from SharePoint above.</div>';
+                } else {
+                    data.files.forEach(file => {
+                        html += `<div class="file-item file">
+                            <span class="file-name">${file.name}</span>
+                            <span class="file-size">${formatBytes(file.size)}</span>
+                            <button class="btn btn-success" onclick='getDropboxLink("${file.path}")'>📋 Copy Link</button>
+                            <button class="btn btn-danger" onclick='deleteFromDropbox("${file.path}", "${file.name}")'>🗑️ Delete</button>
+                        </div>`;
+                    });
+                }
+                
+                content.innerHTML = html;
+                
+            } catch (error) {
+                content.innerHTML = `<div class="message error">Failed to load files: ${error.message}</div>`;
+            }
+        }
+
+        async function getDropboxLink(filePath) {
+            try {
+                const response = await fetch('/dropbox/link', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ path: filePath })
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    showMessage(`Error: ${data.error}`, 'error');
+                } else {
+                    // Copy to clipboard
+                    navigator.clipboard.writeText(data.link).then(() => {
+                        showMessage(`✅ Link copied to clipboard!`, 'success');
+                    });
+                }
+                
+            } catch (error) {
+                showMessage(`Failed to generate link: ${error.message}`, 'error');
+            }
+        }
+
+        async function deleteFromDropbox(filePath, fileName) {
+            if (!confirm(`Delete ${fileName} from Dropbox?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/dropbox/delete', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ path: filePath })
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    showMessage(`Error: ${data.error}`, 'error');
+                } else {
+                    showMessage(`✅ ${fileName} deleted successfully!`, 'success');
+                    refreshDropbox();
+                }
+                
+            } catch (error) {
+                showMessage(`Failed to delete: ${error.message}`, 'error');
+            }
         }
 
         // Load files on page load
-        browse();
+        browseSharePoint();
+        refreshDropbox();
     </script>
 </body>
 </html>

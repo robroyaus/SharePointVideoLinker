@@ -1,17 +1,28 @@
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, Response
+from functools import wraps
 import os
 from datetime import datetime, timedelta
 import secrets
 import msal
 import requests
 import json
+import dropbox
+from dropbox.exceptions import ApiError
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
 
 # Configuration
 SHAREPOINT_SITE_URL = os.getenv('SHAREPOINT_SITE_URL', '')
-PUBLIC_URL = os.getenv('PUBLIC_URL', '')  # Set this to your ngrok URL
+SHAREPOINT_START_FOLDER = os.getenv('SHAREPOINT_START_FOLDER', 'Shared Documents')
+PUBLIC_URL = os.getenv('PUBLIC_URL', '')
+
+DROPBOX_ACCESS_TOKEN = os.getenv('DROPBOX_ACCESS_TOKEN', '')
+DROPBOX_FOLDER = os.getenv('DROPBOX_FOLDER', '/Public/Videos')
+
+APP_USERNAME = os.getenv('APP_USERNAME', 'admin')
+APP_PASSWORD = os.getenv('APP_PASSWORD', 'changeme')
+
 CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"  # Microsoft Graph PowerShell app (public client)
 AUTHORITY = "https://login.microsoftonline.com/common"
 SCOPES = [
@@ -20,6 +31,13 @@ SCOPES = [
     "User.Read"
 ]
 TOKEN_CACHE_FILE = "token_cache.json"
+
+# Initialize Dropbox client
+def get_dropbox_client():
+    """Get authenticated Dropbox client"""
+    if not DROPBOX_ACCESS_TOKEN:
+        return None
+    return dropbox.Dropbox(DROPBOX_ACCESS_TOKEN)
 
 # Extract site details from URL
 def parse_site_url(url):
@@ -86,16 +104,39 @@ def get_graph_headers():
         'Content-Type': 'application/json'
     }
 
+def check_auth(username, password):
+    """Check if username/password combination is valid"""
+    return username == APP_USERNAME and password == APP_PASSWORD
+
+def authenticate():
+    """Send 401 response for basic auth"""
+    return Response(
+        'Authentication required', 401,
+        {'WWW-Authenticate': 'Basic realm="Login Required"'}
+    )
+
+def requires_auth(f):
+    """Decorator to require basic authentication"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
+
 
 @app.route('/')
+@requires_auth
 def index():
     """Home page"""
-    if not SHAREPOINT_SITE_URL:
+    if not SHAREPOINT_SITE_URL or not DROPBOX_ACCESS_TOKEN:
         return render_template('setup.html')
     return render_template('index.html')
 
 
 @app.route('/browse')
+@requires_auth
 def browse():
     """Browse SharePoint folders and files using Microsoft Graph"""
     folder_path = request.args.get('path', 'Shared Documents')
@@ -302,6 +343,7 @@ def stream_video(site_id, drive_id, item_id):
 
 
 @app.route('/test-connection', methods=['POST'])
+@requires_auth
 def test_connection():
     """Test SharePoint connection using Microsoft Graph"""
     try:
@@ -324,6 +366,185 @@ def test_connection():
         else:
             return jsonify({'error': f'Failed to connect: {response.text}'}), response.status_code
             
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# Dropbox Routes
+
+@app.route('/dropbox/list', methods=['GET'])
+@requires_auth
+def dropbox_list():
+    """List MP4 files in Dropbox folder"""
+    try:
+        dbx = get_dropbox_client()
+        if not dbx:
+            return jsonify({'error': 'Dropbox not configured'}), 500
+        
+        # List files in configured folder
+        result = dbx.files_list_folder(DROPBOX_FOLDER)
+        
+        files = []
+        for entry in result.entries:
+            if isinstance(entry, dropbox.files.FileMetadata) and entry.name.lower().endswith('.mp4'):
+                files.append({
+                    'name': entry.name,
+                    'size': entry.size,
+                    'path': entry.path_display,
+                    'id': entry.id
+                })
+        
+        return jsonify({'files': files})
+        
+    except ApiError as e:
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/dropbox/copy', methods=['POST'])
+@requires_auth
+def dropbox_copy():
+    """Copy file from SharePoint to Dropbox"""
+    data = request.get_json()
+    item_id = data.get('item_id')
+    drive_id = data.get('drive_id')
+    site_id = data.get('site_id')
+    filename = data.get('filename')
+    
+    if not all([item_id, drive_id, site_id, filename]):
+        return jsonify({'error': 'Missing required parameters'}), 400
+    
+    try:
+        # Get file from SharePoint
+        headers = get_graph_headers()
+        item_url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives/{drive_id}/items/{item_id}"
+        item_response = requests.get(item_url, headers=headers)
+        
+        if item_response.status_code != 200:
+            return jsonify({'error': 'Failed to get file from SharePoint'}), item_response.status_code
+        
+        item_data = item_response.json()
+        download_url = item_data.get('@microsoft.graph.downloadUrl', '')
+        
+        if not download_url:
+            return jsonify({'error': 'No download URL available'}), 404
+        
+        # Download file from SharePoint
+        file_response = requests.get(download_url, stream=True)
+        
+        if file_response.status_code != 200:
+            return jsonify({'error': 'Failed to download file'}), file_response.status_code
+        
+        # Upload to Dropbox
+        dbx = get_dropbox_client()
+        if not dbx:
+            return jsonify({'error': 'Dropbox not configured'}), 500
+        
+        dropbox_path = f"{DROPBOX_FOLDER}/{filename}"
+        
+        # Upload file in chunks
+        file_size = int(file_response.headers.get('Content-Length', 0))
+        CHUNK_SIZE = 4 * 1024 * 1024  # 4MB chunks
+        
+        if file_size <= CHUNK_SIZE:
+            # Small file - upload in one go
+            dbx.files_upload(file_response.content, dropbox_path, mode=dropbox.files.WriteMode.overwrite)
+        else:
+            # Large file - use upload session
+            upload_session = dbx.files_upload_session_start(b'')
+            cursor = dropbox.files.UploadSessionCursor(upload_session.session_id, 0)
+            commit = dropbox.files.CommitInfo(dropbox_path, mode=dropbox.files.WriteMode.overwrite)
+            
+            for chunk in file_response.iter_content(chunk_size=CHUNK_SIZE):
+                if len(chunk) > 0:
+                    dbx.files_upload_session_append_v2(chunk, cursor)
+                    cursor.offset += len(chunk)
+            
+            dbx.files_upload_session_finish(b'', cursor, commit)
+        
+        return jsonify({
+            'success': True,
+            'message': f'File {filename} copied to Dropbox',
+            'path': dropbox_path
+        })
+        
+    except ApiError as e:
+        return jsonify({'error': f'Dropbox error: {str(e)}'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/dropbox/delete', methods=['POST'])
+@requires_auth
+def dropbox_delete():
+    """Delete file from Dropbox"""
+    data = request.get_json()
+    file_path = data.get('path')
+    
+    if not file_path:
+        return jsonify({'error': 'Missing file path'}), 400
+    
+    try:
+        dbx = get_dropbox_client()
+        if not dbx:
+            return jsonify({'error': 'Dropbox not configured'}), 500
+        
+        dbx.files_delete_v2(file_path)
+        
+        return jsonify({
+            'success': True,
+            'message': 'File deleted successfully'
+        })
+        
+    except ApiError as e:
+        return jsonify({'error': f'Dropbox error: {str(e)}'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/dropbox/link', methods=['POST'])
+@requires_auth
+def dropbox_link():
+    """Generate direct download link for Dropbox file"""
+    data = request.get_json()
+    file_path = data.get('path')
+    
+    if not file_path:
+        return jsonify({'error': 'Missing file path'}), 400
+    
+    try:
+        dbx = get_dropbox_client()
+        if not dbx:
+            return jsonify({'error': 'Dropbox not configured'}), 500
+        
+        # Create shared link
+        try:
+            shared_link = dbx.sharing_create_shared_link(file_path)
+            link_url = shared_link.url
+        except ApiError as e:
+            if e.error.is_shared_link_already_exists():
+                # Link already exists, get it
+                links = dbx.sharing_list_shared_links(path=file_path)
+                if links.links:
+                    link_url = links.links[0].url
+                else:
+                    return jsonify({'error': 'Failed to get existing link'}), 500
+            else:
+                raise
+        
+        # Convert to direct download link
+        # Change www.dropbox.com to dl.dropboxusercontent.com and remove ?dl=0
+        direct_url = link_url.replace('www.dropbox.com', 'dl.dropboxusercontent.com').replace('?dl=0', '')
+        
+        return jsonify({
+            'success': True,
+            'link': direct_url,
+            'sharing_link': link_url
+        })
+        
+    except ApiError as e:
+        return jsonify({'error': f'Dropbox error: {str(e)}'}), 500
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
