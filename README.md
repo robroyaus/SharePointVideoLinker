@@ -1,4 +1,4 @@
-# SharePoint to Dropbox Video Bridge
+# VideoBridge
 
 A web application that bridges SharePoint and Dropbox, allowing you to browse SharePoint video files, copy them to Dropbox, and generate direct public download links for use with Metricool and other services.
 
@@ -103,7 +103,7 @@ Navigate to `http://localhost:5000` and log in with your configured credentials.
    cd /home/username/yourdomain.com/
    
    # Upload via SFTP or git clone
-   git clone https://github.com/robroyaus/SharePointVideoLinker.git .
+   git clone https://github.com/robroyaus/VideoBridge.git .
    
    # Install dependencies
    pip3 install -r requirements.txt
@@ -128,7 +128,7 @@ Navigate to `http://localhost:5000` and log in with your configured credentials.
    ```apache
    # Basic Authentication
    AuthType Basic
-   AuthName "SharePoint Video Bridge"
+   AuthName "VideoBridge"
    AuthUserFile /home/username/.htpasswd
    Require valid-user
    
