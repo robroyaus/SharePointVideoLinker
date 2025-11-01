@@ -394,10 +394,8 @@ def dropbox_list():
                     'id': entry.id
                 })
         
-        print(f"DEBUG: Returning {len(files)} files from Dropbox")
-        for f in files:
-            print(f"  - {f['name']}")
         
+        return jsonify({'files': files})
         
     except ApiError as e:
         return jsonify({'error': str(e)}), 500
